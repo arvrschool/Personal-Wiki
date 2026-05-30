@@ -1,0 +1,28 @@
+# Personal Wiki Dependencies
+
+# --- Core (always required) ---
+PyYAML>=6.0
+beautifulsoup4>=4.12       # HTML parsing for --web-resources (search_web_resources.py)
+requests>=2.31             # HTTP fallback for ollama provider and misc fetches
+networkx>=3.0              # Knowledge graph construction (build_kg.py)
+plotly>=5.20               # Interactive knowledge graph HTML export
+Pillow>=10.0               # Figure dimension checks and image handling
+
+# --- Article / media ingestion ---
+dokobot>=0.1.0             # WeChat / Zhihu / XHS / generic URL fetching
+yt-dlp>=2023.11.16         # YouTube metadata + subtitles for --media
+
+# --- PDF extraction (any one suffices; pdftotext is the primary method) ---
+# NOTE: pdftotext is a SYSTEM command, not a Python package. 
+# Installation: 
+#   macOS: brew install poppler
+#   Ubuntu/Debian: apt-get install poppler-utils
+#   Windows: Download poppler binaries and add to PATH
+
+pypdf>=4.0                 # pure-Python fallback (Agent usage)
+# pdfminer.six>=20221105   # advanced Python fallback
+# pymupdf>=1.23            # fast Python alternative (requires libmupdf)
+
+# --- LLM SDK providers (install whichever you use) ---
+# anthropic>=0.25          # for --llm-provider anthropic
+# openai>=1.14             # for --llm-provider openai

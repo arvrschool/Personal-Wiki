@@ -1,0 +1,218 @@
+# Paper Search KG — centralized configuration
+# All values here serve as defaults; scripts use cfg(section, key, default)
+# so they remain backward-compatible even without this file.
+
+# ---------------------------------------------------------------------------
+[llm]
+# ---------------------------------------------------------------------------
+# LLM provider: "auto" | "anthropic" | "openai" | "ollama" | "direct-inference"
+provider = "direct-inference"
+# Default model name passed to the LLM provider
+model = "deepseek-v4-flash"
+# OpenAI-compatible profile name used when provider="openai".
+# Leave empty to infer from model name (e.g. deepseek-chat -> [deepseek]).
+api_profile = ""
+# Subprocess timeout for call_llm() in seconds
+timeout = 300
+
+# ---------------------------------------------------------------------------
+[anthropic]
+# ---------------------------------------------------------------------------
+# API credentials for anthropic provider. Prefer putting real secrets into
+# scripts/config.local.toml so they don't get committed.
+api_key = ""
+auth_token = ""
+base_url = ""
+
+# ---------------------------------------------------------------------------
+[openai]
+# ---------------------------------------------------------------------------
+# Generic OpenAI-compatible endpoint. Used by provider="openai" unless a more
+# specific profile is selected via llm.api_profile or inferred from model name.
+api_key = ""
+base_url = "https://api.openai.com/v1"
+
+# ---------------------------------------------------------------------------
+[deepseek]
+# ---------------------------------------------------------------------------
+api_key = ""
+base_url = "https://api.deepseek.com/v1"
+
+# ---------------------------------------------------------------------------
+[qwen]
+# ---------------------------------------------------------------------------
+api_key = ""
+base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+# ---------------------------------------------------------------------------
+[kimi]
+# ---------------------------------------------------------------------------
+api_key = ""
+base_url = "https://api.moonshot.cn/v1"
+
+# ---------------------------------------------------------------------------
+[openrouter]
+# ---------------------------------------------------------------------------
+api_key = ""
+base_url = "https://openrouter.ai/api/v1"
+
+# ---------------------------------------------------------------------------
+[siliconflow]
+# ---------------------------------------------------------------------------
+api_key = ""
+base_url = "https://api.siliconflow.cn/v1"
+
+# ---------------------------------------------------------------------------
+[git]
+# ---------------------------------------------------------------------------
+# Only create a git commit when --git-commit is passed explicitly.
+# This keeps ordinary ingest/enrich runs non-destructive while still supporting
+# versioned knowledge bases when the caller wants a checkpoint.
+auto_commit = false
+
+# ---------------------------------------------------------------------------
+[search]
+# ---------------------------------------------------------------------------
+# Max results per arXiv query in _arxiv_query()
+arxiv_per_query = 25
+# Max papers returned per author search in search_by_author()
+author_limit = 20
+# Max papers returned per related-concept query in search_papers_multidim()
+related_limit = 15
+# Max papers returned per extra (specific paper name) query in search_papers_multidim()
+extra_limit = 10
+# Max results from OpenReview API in search_by_openreview()
+openreview_limit = 20
+# Max results from Google Scholar scrape in _scholar_search()
+scholar_limit = 10
+# Seconds to sleep between arXiv retry attempts (line ~93 in search_papers_web.py)
+search_delay_arxiv = 2.0
+# Seconds to sleep between Google Scholar page requests
+search_delay_scholar = 1.2
+# Seconds to sleep between author/related search dimensions
+search_delay_batch = 0.5
+# Seconds to sleep between extra (specific paper) queries
+search_delay_extra = 0.3
+
+# ---------------------------------------------------------------------------
+[web_resources]
+# ---------------------------------------------------------------------------
+# Max blog/article results returned by search_articles()
+max_articles = 6
+# Max YouTube video results returned by search_youtube_videos()
+max_videos = 6
+# Max GitHub repos returned by search_github_projects()
+max_github = 2
+# Max results fetched per individual Bing query inside search_articles()
+articles_per_page = 3
+# Max WeChat articles from Sogou (≈ max_articles // 2)
+sogou_limit = 3
+# Seconds to sleep after Sogou WeChat search inside search_articles()
+delay_between_sources = 0.5
+# Seconds to sleep between per-platform Bing queries inside search_articles()
+delay_between_queries = 0.3
+
+# ---------------------------------------------------------------------------
+[figures]
+# ---------------------------------------------------------------------------
+# Max figures to download per paper in fetch_figures() / enrich_source_page()
+max_figures = 10
+# Minimum file size in KB to keep a downloaded figure (filters out tiny icons)
+min_size_kb = 15
+# HTTP timeout in seconds for downloading each figure image
+download_timeout = 20
+
+# ---------------------------------------------------------------------------
+[media]
+# ---------------------------------------------------------------------------
+# Max GIFs to download per paper
+max_gif_count = 3
+# Max YouTube videos to collect per paper
+max_youtube = 2
+# Maximum GIF file size in MB before skipping download
+max_gif_mb = 20
+# Max video IDs returned by a single _youtube_search() call
+youtube_search_limit = 5
+# Seconds to sleep between individual YouTube video metadata fetches
+delay_between_videos = 0.5
+
+# ---------------------------------------------------------------------------
+[pdf]
+# ---------------------------------------------------------------------------
+# HTTP timeout in seconds for download_pdf()
+download_timeout = 120
+# Seconds to sleep between successive PDF downloads in batch_download_pdfs()
+download_delay = 1.5
+# Max characters returned by extract_pdf_text() (covers ~20 pages)
+max_text_chars = 40000
+# Max characters returned by fetch_url_text() for project page content
+url_fetch_max_chars = 8000
+# Subprocess timeout in seconds for pdftotext
+pdftotext_timeout = 30
+
+# ---------------------------------------------------------------------------
+[wiki]
+# ---------------------------------------------------------------------------
+# Human-readable topic name for this wiki, used in LLM prompts.
+# Override per-project by setting this in your local config.toml copy.
+topic = "AI research"
+# Default category when no matching topic is found in topics/*.md
+fallback_category = "其他"
+# Max abstract characters used in entity/topic LLM classification prompts
+abstract_truncate = 300
+# Max abstract characters used in classify_papers() source LLM prompt
+source_abstract_truncate = 800
+# Max context characters passed to enrich_topic_page() LLM prompt
+topic_context_max = 5000
+# Max context characters passed to enrich_entity_page() LLM prompt
+entity_context_max = 5000
+# Max context characters passed to generate_survey() topic section
+survey_topic_context_max = 8000
+# Max characters of open-questions text passed to generate_survey()
+survey_questions_max = 2000
+# Max context characters passed to _build_comparison_table() LLM prompt
+compare_table_context_max = 6000
+# Max characters of project URL content included in enrich_source_page() prompt
+project_content_max = 3000
+# Max related papers shown in enrich_source_page() related_titles prompt section
+related_papers_count = 6
+# Max related papers used when building LLM slug list in enrich_source_page()
+max_related_in_table = 6
+# Max papers passed to enrich_entity_page() context (papers_by_concept slice)
+entity_papers_max = 8
+# Max formula candidate lines extracted from PDF before LLM enrichment
+max_formulas = 25
+# Max characters of PDF section text passed to LLM (per section) in enrich_source_page()
+section_text_max = 5000
+
+# ---------------------------------------------------------------------------
+[article_ingest]
+# ---------------------------------------------------------------------------
+# Max article Markdown chars passed to LLM extraction prompt
+article_max_chars = 30000
+# Max results per arXiv search in _search_and_ingest_paper()
+arxiv_search_limit = 5
+# Max results per OpenReview fallback search
+openreview_search_limit = 5
+# Max web results in web-search fallback
+web_search_limit = 5
+# Minimum Jaccard title overlap to accept an arXiv match
+arxiv_match_threshold = 0.5
+# Minimum Jaccard to accept an OpenReview match
+openreview_match_threshold = 0.5
+# Minimum combined score to accept a web-search result
+web_match_threshold = 0.4
+# Minimum title overlap (without domain boost) required for web results
+web_title_min = 0.3
+# Domain boost added when result URL is from a trusted research domain
+web_domain_boost = 0.15
+# Score assigned when top-1 arXiv trust heuristic fires (CamelCase + 1 result)
+arxiv_top1_trust_score = 0.45
+# Minimum title Jaccard to accept a KB fuzzy match in _find_paper_in_kb()
+kb_match_threshold = 0.6
+# Minimum title Jaccard to detect a duplicate when no arxiv_id is available
+kb_dedup_threshold = 0.8
+# Trusted research domains used by web-search fallback (comma-separated)
+trusted_domains = "github.io,openreview.net,.google,deepmind.com,arxiv.org,nips.cc,proceedings.mlr.press,openai.com,anthropic.com,pytorch.org,huggingface.co"
+# Research signal keywords used to filter web results (comma-separated)
+research_signals = "arxiv,paper,model,neural,robot,diffusion,transformer,learning,conference,proceedings,github.io"

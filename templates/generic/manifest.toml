@@ -1,0 +1,13 @@
+id = "generic"
+label = "Generic Entry"
+description = "General-purpose template for notes, bookmarks, repos, and mixed sources."
+entry_type = "generic"
+enrich_mode = "generic"
+
+[sections]
+summary = "摘要"
+facts = "关键事实"
+highlights = "要点"
+relations = "关联内容"
+notes = "我的注释"
+actions = "行动项"

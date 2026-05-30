@@ -1,0 +1,10 @@
+id = "web_article"
+label = "Web Article"
+description = "Template for articles, blog posts, newsletters, and social content."
+entry_type = "article"
+enrich_mode = "none"
+
+[sections]
+summary = "文章摘要"
+highlights = "核心观点"
+mentions = "提到的内容"

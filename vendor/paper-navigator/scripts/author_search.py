@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+"""Search for authors and their papers via Semantic Scholar API."""
+
+import argparse
+import json
+import sys
+
+import httpx
+
+from utils import S2_BASE, s2_headers, request_with_retry
+
+AUTHOR_FIELDS = "authorId,name,affiliations,paperCount,citationCount,hIndex"
+PAPER_FIELDS = "paperId,externalIds,title,year,citationCount,isOpenAccess,openAccessPdf"
+
+
+def search_author(name: str) -> list[dict]:
+    """Search for authors by name."""
+    with httpx.Client() as client:
+        data = request_with_retry(
+            client,
+            f"{S2_BASE}/author/search",
+            {"query": name, "fields": AUTHOR_FIELDS, "limit": 5},
+            s2_headers(),
+        )
+    return data.get("data", [])
+
+
+def get_author_papers(author_id: str, limit: int = 20) -> list[dict]:
+    """Get papers by a specific author."""
+    with httpx.Client() as client:
+        data = request_with_retry(
+            client,
+            f"{S2_BASE}/author/{author_id}/papers",
+            {"fields": PAPER_FIELDS, "limit": min(limit, 1000)},
+            s2_headers(),
+        )
+    return data.get("data", [])
+
+
+def format_author(a: dict) -> str:
+    name = a.get("name", "Unknown")
+    aid = a.get("authorId", "")
+    affiliations = ", ".join(a.get("affiliations", [])[:2]) or "N/A"
+    papers = a.get("paperCount", 0)
+    citations = a.get("citationCount", 0)
+    h_index = a.get("hIndex", "?")
+    return (
+        f"**{name}** (ID: `{aid}`)\n"
+        f"  Affiliation: {affiliations} | Papers: {papers} | "
+        f"Citations: {citations} | h-index: {h_index}"
+    )
+
+
+def format_paper(p: dict, idx: int) -> str:
+    title = p.get("title", "Unknown")
+    year = p.get("year", "?")
+    citations = p.get("citationCount", 0)
+    ext = p.get("externalIds", {})
+    arxiv = ext.get("ArXiv", "")
+    id_str = f"arXiv:`{arxiv}`" if arxiv else f"S2:`{p.get('paperId', '')[:12]}…`"
+
+    return f"{idx}. **{title}** ({year}) — ⭐{citations} — {id_str}"
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Search authors via Semantic Scholar")
+    parser.add_argument("--name", help="Author name to search")
+    parser.add_argument("--author-id", help="S2 author ID (skip name search)")
+    parser.add_argument("--papers", action="store_true", help="List author's papers")
+    parser.add_argument(
+        "--limit", "-l", type=int, default=20, help="Max papers (default 20)"
+    )
+    parser.add_argument("--sort-by", choices=["citations", "year"], default="year")
+    parser.add_argument(
+        "--year-min",
+        type=int,
+        help="Keep only papers with year >= this (client-side filter; S2 API has no server-side year filter for author papers)",
+    )
+    parser.add_argument(
+        "--year-max", type=int, help="Keep only papers with year <= this"
+    )
+    parser.add_argument(
+        "--candidate-pool",
+        type=int,
+        default=200,
+        help="Internal fetch size when year filter is set (default 200). Increase for prolific authors.",
+    )
+    parser.add_argument("--json", action="store_true", help="Output raw JSON")
+    args = parser.parse_args()
+
+    if not args.name and not args.author_id:
+        print("Error: --name or --author-id required", file=sys.stderr)
+        sys.exit(1)
+
+    # Resolve author ID
+    author_id = args.author_id
+    if not author_id:
+        authors = search_author(args.name)
+        if not authors:
+            print(f"No author found for '{args.name}'", file=sys.stderr)
+            sys.exit(0)
+
+        if args.json and not args.papers:
+            print(json.dumps(authors, indent=2))
+            return
+
+        print("# Author Search Results\n")
+        for a in authors:
+            print(format_author(a))
+            print()
+
+        author_id = authors[0]["authorId"]
+        if not args.papers:
+            return
+        print("---\n")
+
+    # Get papers
+    if args.papers or args.author_id:
+        # When year filtering, over-fetch from candidate-pool so we still get N results after filter
+        fetch_size = (
+            args.candidate_pool if (args.year_min or args.year_max) else args.limit
+        )
+        papers = get_author_papers(author_id, fetch_size)
+
+        # Year filters (client-side; S2 has no server-side year param for /author/{id}/papers)
+        if args.year_min is not None:
+            papers = [p for p in papers if (p.get("year") or 0) >= args.year_min]
+        if args.year_max is not None:
+            papers = [p for p in papers if (p.get("year") or 0) <= args.year_max]
+
+        if args.sort_by == "citations":
+            papers.sort(key=lambda p: p.get("citationCount", 0), reverse=True)
+        else:
+            papers.sort(key=lambda p: p.get("year", 0), reverse=True)
+
+        papers = papers[: args.limit]
+
+        if args.json:
+            print(json.dumps(papers, indent=2))
+            return
+
+        print(f"# Papers by Author `{author_id}`\n")
+        print(f"Showing **{len(papers)}** papers (sorted by {args.sort_by})\n")
+        for i, p in enumerate(papers, 1):
+            print(format_paper(p, i))
+        print()
+
+
+if __name__ == "__main__":
+    main()

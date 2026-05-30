@@ -1,0 +1,17 @@
+id = "research_paper"
+label = "Research Paper"
+description = "Structured source page for academic papers and technical PDFs."
+entry_type = "paper"
+enrich_mode = "research_paper"
+
+[sections]
+facts = "基本信息"
+summary = "摘要"
+highlights = "核心观点"
+concepts = "关键概念"
+relations = "与其他论文的关联"
+citation = "引用关系"
+method = "方法摘要"
+detailed_method = "具体方法"
+results = "实验与结果"
+figures = "论文图表"
