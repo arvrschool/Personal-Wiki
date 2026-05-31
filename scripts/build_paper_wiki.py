@@ -77,8 +77,27 @@ def _slug(text: str) -> str:
     return s[:150]
 
 
+def _table_esc(text: str) -> str:
+    """Escape pipe characters for markdown table compatibility."""
+    if not text:
+        return ""
+    return str(text).replace("|", "\\|")
+
+
 def _wikilink(title: str) -> str:
-    return f"[[{title}]]"
+    """Create an Obsidian-style wikilink. If it looks like a concept, slugify the target."""
+    if not title:
+        return ""
+    slug = _slug(title)
+    # If the title is already exactly equal to its slugified version, 
+    # don't add a redundant | label.
+    if slug == title:
+        return f"[[{title}]]"
+    # If it looks like a concept (title maps to slug with just casing/space changes),
+    # use [[slug|Title]] and escape the pipe for tables.
+    if slug == title.lower().replace(" ", "-"):
+        return f"[[{slug}\\|{title}]]"
+    return f"[[{_table_esc(title)}]]"
 
 
 def _is_enriched_content(text: str) -> bool:
@@ -107,12 +126,13 @@ def _replace_section(content: str, header: str, new_body: str) -> str:
         r"(?=^##|\Z)",                           # stop at next ## or EOF
         re.MULTILINE,
     )
-    replacement = r"\g<1>" + new_body.rstrip("\n") + "\n\n"
-    updated, n = pattern.subn(replacement, content)
-    if n == 0:
+    match = pattern.search(content)
+    if match:
+        updated = content[:match.start(2)] + new_body.rstrip("\n") + "\n\n" + content[match.end(2):]
+        return updated
+    else:
         # Section missing — append it
-        updated = content.rstrip("\n") + f"\n\n{header}\n\n{new_body.rstrip()}\n"
-    return updated
+        return content.rstrip("\n") + f"\n\n{header}\n\n{new_body.rstrip()}\n"
 
 
 def _update_entity_page(path: Path, concept: str, papers: list[dict]) -> bool:
@@ -306,7 +326,6 @@ def _first_summary_sentence(entry: dict, limit: int = 60) -> str:
         if not text:
             continue
         sentence = re.split(r"(?<=[。！？.!?])\s+", text, maxsplit=1)[0].strip()
-        sentence = sentence.replace("|", "/")
         if sentence:
             return sentence[:limit].rstrip()
     return ""
@@ -328,7 +347,7 @@ def _topic_table_row(entry: dict) -> str:
     owner = entry_owner_label(entry)
     when = entry_time_label(entry)
     contrib = _one_line_contribution(entry)
-    return f"| {_wikilink(page_name)} | {title} | {owner} | {when} | {contrib} |"
+    return f"| {_wikilink(page_name)} | {_table_esc(title)} | {_table_esc(owner)} | {_table_esc(when)} | {_table_esc(contrib)} |"
 
 
 def _topic_table(rows: list[str]) -> str:
@@ -604,13 +623,34 @@ sources: []
 # Topic page (one per category)
 # ---------------------------------------------------------------------------
 
-def build_topic_page(topic: str, description: str, papers: list[dict]) -> str:
+def build_topic_page(topic: str, description: str, papers: list[dict], template_dir: str | Path | None = None) -> str:
     topic_papers = [p for p in papers if _get_category(p) == topic]
     rows = [_topic_table_row(p) for p in topic_papers]
-    table = _topic_table(rows)
-    compare_hint, compare_table = _topic_compare_block(topic_papers)
+    table_rows = "\n".join(rows) if rows else "| （暂无） | | | | |"
+    
+    all_concepts = sorted({concept for p in topic_papers for concept in _get_concepts(p)})
+    concept_links = markdown_bullets([_wikilink(c) for c in all_concepts[:15]], fallback="（暂无相关概念）")
 
-    return f"""---
+    template_id = "research_topic"
+    context = {
+        "title": topic,
+        "category_tag": topic,
+        "created": TODAY,
+        "updated": TODAY,
+        "sources_frontmatter": yaml_array([]),
+        "lead": description,
+        "summary_body": "（运行 enrich_wiki.py --only-topics 自动生成综述，或在此手动填写该主题的核心认知）",
+        "concept_links": concept_links,
+        "table_rows": table_rows,
+        "parent_category": "index",
+    }
+    
+    try:
+        return render_template(template_id, context, template_dir=template_dir)
+    except Exception:
+        # Fallback if template doesn't exist yet or fails
+        table = _topic_table(rows)
+        return f"""---
 tags: [主题]
 created: {TODAY}
 updated: {TODAY}
@@ -621,31 +661,9 @@ sources: []
 
 > {description}
 
-## 核心观点
-
-（从该分类的多篇条目中综合出的核心认知）
-
 ## {TOPIC_ENTRIES_HEADER}
 
 {table}
-
-## 关键主题
-
-（本主题涉及的核心概念，链接到实体页）
-
-## 对比分析
-
-{compare_hint}
-
-{compare_table}
-
-## 研究脉络
-
-（按时间线梳理该主题下素材、观点或方法的演进方向）
-
-## 未解决的问题
-
-（素材中提到但还没有答案的开放性问题）
 
 ## 相关页面
 
@@ -871,7 +889,11 @@ def main():
     written_entities = []
     updated_entities = []
     for concept in sorted(all_concepts):
-        path = entities_dir / f"{concept}.md"
+        # Strictly slugify for filename
+        slug_name = _slug(concept)
+        if not slug_name: continue
+        
+        path = entities_dir / f"{slug_name}.md"
         if not path.exists() or args.rebuild:
             content = build_entity_page(concept, papers)
             path.write_text(content, encoding="utf-8")

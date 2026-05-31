@@ -1527,6 +1527,13 @@ def _article_slug_v2(title: str, platform: str) -> str:
 # Step 4: Write article page
 # ---------------------------------------------------------------------------
 
+def _table_esc(text: str) -> str:
+    """Escape pipe characters for markdown table compatibility."""
+    if not text:
+        return ""
+    return str(text).replace("|", "\\|")
+
+
 def _format_article_page(
     info: dict,
     source_url: str,
@@ -1576,7 +1583,7 @@ def _format_article_page(
         note = paper_info.get("key_claim", "").replace('\n', ' ')
         conflict_mark = " ⚡" if conflict_flags.get(slug) else ""
         entry_type = _mentioned_entry_type_label(kb_paper or paper_info)
-        table_rows.append(f"| {p_title} | [[{slug}]]{conflict_mark} | {entry_type} | {stance} | {note} |")
+        table_rows.append(f"| {_table_esc(p_title)} | [[{slug}]]{conflict_mark} | {_table_esc(entry_type)} | {_table_esc(stance)} | {_table_esc(note)} |")
 
     # 2. New entries
     for item in new_papers:
@@ -1590,7 +1597,7 @@ def _format_article_page(
         # Ensure it's a wikilink
         wiki_link = f"[[{slug}]]" if slug else "—"
         entry_type = _mentioned_entry_type_label(kb_paper or paper_info)
-        table_rows.append(f"| {p_title} | {wiki_link} | {entry_type} | {stance} | {note} |")
+        table_rows.append(f"| {_table_esc(p_title)} | {wiki_link} | {_table_esc(entry_type)} | {_table_esc(stance)} | {_table_esc(note)} |")
 
     # 3. Pending entries
     for item in pending_papers:
@@ -1599,12 +1606,13 @@ def _format_article_page(
         description = paper_info.get("description", "")[:80].replace('\n', ' ')
         stance = paper_info.get("mention_stance") or paper_info.get("article_stance", "未知")
         entry_type = _mentioned_entry_type_label(paper_info)
-        table_rows.append(f"| {p_title} | （未找到匹配） | {entry_type} | {stance} | {description} |")
+        table_rows.append(f"| {_table_esc(p_title)} | （未找到匹配） | {_table_esc(entry_type)} | {_table_esc(stance)} | {_table_esc(description)} |")
 
     papers_table = (
         "| 条目 | Wiki 页面 | 类型 | 文章态度 | 备注 |\n"
         "|------|-----------|------|----------|------|\n"
     ) + "\n".join(table_rows) if table_rows else "| （未提及） | | | | |\n"
+
 
     linked_pages = [
         f"[[{item['slug']}]]"

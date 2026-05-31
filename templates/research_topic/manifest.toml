@@ -1,0 +1,11 @@
+name = "研究主题/综述模板"
+description = "用于特定研究领域（如具身智能、世界模型）的深度综述与对比分析，自动关联库内论文。"
+type = "topic"
+
+[variables]
+lead = "主题一句话简介"
+category_tag = "主标签"
+summary_body = "核心综述正文"
+concept_links = "关键概念实体链接列表"
+table_rows = "自动生成的论文汇总行"
+parent_category = "父级主题或index"

@@ -575,7 +575,11 @@ def update_entity_pages(paper: dict, entities_dir: Path) -> int:
     concepts = _extract_concepts(paper)
     updated = 0
     for concept in concepts:
-        entity_candidates = [entities_dir / f"{concept}.md", entities_dir / f"{_slug(concept)}.md"]
+        # Sanitize concept for filename
+        safe_concept = re.sub(r"[^\w\s-]", "", concept)
+        safe_concept = re.sub(r"[\s_]+", "-", safe_concept.strip()).strip("-")
+        
+        entity_candidates = [entities_dir / f"{safe_concept}.md"]
         entity_path = next((p for p in entity_candidates if p.exists()), None)
         if entity_path is None:
             entities_dir.mkdir(parents=True, exist_ok=True)
@@ -687,6 +691,13 @@ def _sync_topic_compare_section(content: str, paper: dict) -> str:
     new_body = f"{compare_hint}\n\n{compare_table}\n"
     return content[:match.start(2)] + new_body + content[match.end(2):]
 
+def _table_esc(text: str) -> str:
+    """Escape pipe characters for markdown table compatibility."""
+    if not text:
+        return ""
+    return str(text).replace("|", "\\|")
+
+
 def update_topic_page(paper: dict, topics_dir: Path, category: str) -> bool:
     """Add a row for this entry to the relevant topic page. Returns True if updated."""
     topic_filename = category + ".md"
@@ -698,7 +709,8 @@ def update_topic_page(paper: dict, topics_dir: Path, category: str) -> bool:
     authors_short = entry_owner_label(paper)
     year = entry_time_label(paper)
     contrib = _one_line_contribution(paper)
-    new_row = f"| [[{slug}]] | {title_short} | {authors_short} | {year} | {contrib} |"
+    # Escape all columns for the markdown table
+    new_row = f"| [[{slug}]] | {_table_esc(title_short)} | {_table_esc(authors_short)} | {_table_esc(year)} | {_table_esc(contrib)} |"
 
     if not topic_path.exists():
         topic_path.parent.mkdir(parents=True, exist_ok=True)
@@ -747,7 +759,6 @@ def _one_line_contribution(paper: dict) -> str:
             if not text:
                 continue
             sentence = re.split(r"(?<=[。！？.!?])\s+", text, maxsplit=1)[0].strip()
-            sentence = sentence.replace("|", "/")
             if sentence:
                 return sentence[:60].rstrip()
         return ""
@@ -755,14 +766,15 @@ def _one_line_contribution(paper: dict) -> str:
     abstract = paper.get("abstract") or ""
     m = re.search(r"[Ww]e (propose|introduce|present|develop|design)[^.]{10,80}", abstract)
     if m:
-        return m.group(0).strip()[:60]
+        return m.group(0).strip().replace("|", "/")[:60]
     summary = _first_summary_sentence()
     if summary:
         return summary
     if not looks_research_entry(paper):
-        title = (paper.get("title") or "该条目").strip()
+        title = (paper.get("title") or "该条目").strip().replace("|", "/")
         return f"围绕《{title[:20]}》整理资料与线索"
     return f"聚焦于{_domain_hint(paper.get('title',''))}相关问题"
+
 
 
 def _domain_hint(title: str) -> str:
