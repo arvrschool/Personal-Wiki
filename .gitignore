@@ -29,4 +29,4 @@ scripts/config.local.toml
 .Trashes
 ehthumbs.db
 Thumbs.db
-
+.llm_prompt.txt

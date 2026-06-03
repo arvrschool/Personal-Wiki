@@ -808,6 +808,8 @@ def fetch_project_content(paper: dict) -> str:
     Returns a combined string ready to include in an LLM prompt.
     """
     urls = paper.get("project_urls") or []
+    if isinstance(urls, dict):
+        urls = list(urls.values())
     if not urls:
         return ""
     parts = []

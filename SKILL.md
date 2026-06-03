@@ -2,11 +2,12 @@
 name: llm-wiki
 description: >
   Universal LLM-powered personal knowledge-base workflow for papers, articles, bookmarks, repos.
-  Supports ingest, enrich, query, lint, and wiki-to-HTML export.
+  Supports ingest, enrich, query, lint, wiki-to-HTML export, and figure extraction/insertion.
   Designed to work across different LLM models (Claude, Gemini, local models) and multiple OS (macOS, Linux).
   Use this skill whenever the user wants a structured, maintainable knowledge base.
   Trigger phrases: "add this URL to the wiki", "ingest this article/paper/bookmark",
-  "search papers on X", "export wiki page to HTML", "convert markdown to HTML".
+  "search papers on X", "export wiki page to HTML", "convert markdown to HTML",
+  "extract figures from paper", "insert figures into document", "下载论文图片".
 ---
 
 # LLM-Wiki Maintenance
@@ -580,6 +581,94 @@ python ./scripts/wiki_to_html.py <wiki_root>/wiki/wiki/sources/<page>.md
 ```
 
 Produces self-contained dark-theme HTML with all images base64-inlined.
+
+---
+
+## Workflow H: Paper Figure Extraction & Insertion
+
+Extract figures from an academic paper PDF and insert them into wiki source pages at the
+correct locations. Three methods, in priority order:
+
+| Priority | Method | Quality | When |
+|----------|--------|---------|------|
+| **1** | arXiv source `.tar.gz` | ⭐⭐⭐ Original vectors | arXiv download succeeds |
+| **2** | PDF page render + crop | ⭐⭐ High-res raster | arXiv download fails |
+| **3** | `pdfimages` extraction | ⭐ Low-res embedded | Quick reference only |
+
+### Step 1 — Try arXiv source (Method 1)
+
+```bash
+wget -O /tmp/<arxiv_id>.tar.gz "https://arxiv.org/src/<arxiv_id>"
+mkdir -p /tmp/<arxiv_id>-src && tar xzf /tmp/<arxiv_id>.tar.gz -C /tmp/<arxiv_id>-src/
+find /tmp/<arxiv_id>-src -type f \( -name "*.pdf" -o -name "*.png" \) | sort
+```
+
+Source structure: `images/*.pdf` (vector figures), `figures/*.tex` (wrappers with captions).
+If download stalls (common — arXiv CDN throttles large files), fall through to Method 2.
+
+### Step 2 — PDF page render + crop (Method 2)
+
+**2a. Render all pages at 300 DPI:**
+
+```python
+import fitz, os
+doc = fitz.open("<wiki_root>/pdfs/<arxiv_id>.pdf")
+out = "<wiki_root>/assets/<paper_name>/"
+os.makedirs(out, exist_ok=True)
+for i in range(doc.page_count):
+    doc[i].get_pixmap(matrix=fitz.Matrix(300/72,300/72)).save(f"{out}/page_{i+1:02d}.png")
+```
+
+**2b. Find figure caption positions (caption is BELOW figure):**
+
+```python
+for pn in [5, 10, 26]:  # target pages
+    page = doc[pn - 1]
+    for b in page.get_text("dict")["blocks"]:
+        if b["type"] != 0: continue
+        text = "".join(s["text"] for l in b.get("lines", []) for s in l.get("spans", []))
+        if "Figure" in text and len(text) > 20:
+            print(f"Page {pn}: y0={b['bbox'][1]:.0f} '{text[:100]}'"); break
+```
+
+**2c. Crop from page top (y=90pt, below header) to just above caption (y0-5pt):**
+
+```python
+from PIL import Image
+S = 300/72  # pts→px
+crops = {5: ("fig1", 70,90,525,350), 10: ("fig2", 70,90,525,320)}
+for pn, (name, l,t,r,b) in crops.items():
+    img = Image.open(f"{out}/page_{pn:02d}.png")
+    img.crop((int(l*S),int(t*S),int(r*S),int((b-5)*S))).save(f"{out}/{name}.png")
+# Clean up: rm page_*.png
+```
+
+**2d. Verify with `look_at`** — adjust `top_pt` if header text visible, `bottom_pt` if caption included.
+
+### Step 3 — Insert into wiki source
+
+Images live in `assets/<paper_name>/`. Source pages in `wiki/wiki/sources/`.
+Relative path: `../../assets/<paper_name>/<figure>.png`.
+
+```markdown
+![Figure X: description](../../assets/<paper_name>/fig2_architecture.png)
+*Figure X: Caption from paper.*
+```
+
+Placement: architecture figs after overview, pipeline figs after method summary, result figs after benchmark tables.
+
+### Common Pitfalls
+
+- **Vector figures invisible to `pdfimages`** — only raster images extracted. This is why Method 2 renders full pages.
+- **arXiv download stalls at ~78%** — network throttling, not script bug. Use Method 2.
+- **Caption y varies by page** — multi-view pages can have captions at y=650+, simple diagrams at y=320. Always run Step 2b per page.
+- **Clean up `page_*.png`** after cropping — they're 400KB-8MB each.
+
+### Dependencies
+
+```bash
+pip install PyMuPDF Pillow
+```
 
 ---
 
