@@ -180,11 +180,13 @@ This produces:
 ### Step 5 — Enrich wiki stubs with LLM
 
 ```bash
+# BASIC: text-only enrichment (figures handled separately)
 python ./scripts/enrich_wiki.py \
   --wiki-dir <outdir>/wiki --entries <outdir>/entries.json --pdf-dir <outdir>/pdfs \
   --llm-provider <provider> --only-sources
 
-# With figures + media + web resources
+# RECOMMENDED: full enrichment with figures + media + web resources
+# ⚠️  --figures is NOT optional for a complete enrichment
 python ./scripts/enrich_wiki.py \
   --wiki-dir <outdir>/wiki --entries <outdir>/entries.json --pdf-dir <outdir>/pdfs \
   --llm-provider <provider> --only-sources --figures --media --web-resources
@@ -196,6 +198,7 @@ python ./scripts/enrich_wiki.py \
 - Source pages are matched to papers by arXiv ID or title slug.
 - `--force`: rewrites all sections including figures/media/web-resources.
 - If a paper has no PDF and no abstract, the LLM generates from its training knowledge.
+- **When `--figures` cannot run (e.g., no LLM CLI) → Agent MUST manually extract and insert figures per Workflow H. This is NOT skippable.**
 
 #### LLM provider resolution
 
@@ -348,6 +351,7 @@ Do not mark the ingest as complete until all items are checked.
        → 脚本会尝试 LLM enrich
        → 如果 fallback 到 direct-inference 模式，会产生 .prompt_*.md 文件
        → 进入下方【Manual enrich checklist】
+       → ⚠️  如果 enrich 已完成，必须检查插图是否也已提取并嵌入
 
 □ 5. index.md 的概览计数是否准确？
        条目总数、研究论文数、种子条目数等应与 entries.json 一致
@@ -364,22 +368,33 @@ Do not mark the ingest as complete until all items are checked.
 When `enrich_wiki.py` falls back to `direct-inference` mode (outputs `.prompt_*.md` files),
 the Agent **must** execute the full enrich manually. Do NOT skip this step.
 
+**⚠️  FIGURE EXTRACTION IS MANDATORY.** Text enrichment and figure extraction MUST run
+in parallel — NEVER do text first then figures later. Both are part of a single enrichment pass.
+
 ```
 □ 1. 读取 prompt 文件
        cat wiki/wiki/sources/.prompt_<slug>.md
        了解需要填充哪些字段（核心观点、方法摘要、具体方法、实验与结果等）
 
-□ 2. 从 PDF 中提取信息
-       Method A — pdftotext（如已安装）：
-         pdftotext pdfs/<id>.pdf pdfs/<id>.txt
-         grep -n "key phrase" pdfs/<id>.txt
+□ 2. 并行提取（PDF 文本 + arXiv 原图 → 同时启动，互不等待）
+       2a. PDF 文本提取（与 2b 并行）：
+           Method A — pdftotext（如已安装）：
+             pdftotext pdfs/<id>.pdf pdfs/<id>.txt
+             grep -n "key phrase" pdfs/<id>.txt
 
-       Method B — pypdf（通用 Python 回退，无系统依赖）：
-         pip install --user --break-system-packages pypdf
-         然后编写 Python 脚本来提取各页文本
+           Method B — pypdf（通用 Python 回退，无系统依赖）：
+             pip install --user --break-system-packages pypdf
+             然后编写 Python 脚本来提取各页文本
 
-       Method C — 直接读取 PDF 元数据 + 项目主页：
-         如果 PDF 解析都不可用，从项目主页、arXiv 页面提取信息
+           Method C — 直接读取 PDF 元数据 + 项目主页：
+             如果 PDF 解析都不可用，从项目主页、arXiv 页面提取信息
+
+       2b. 插图提取（与 2a 并行，不可省略）：
+           按 Workflow H 的 Figure Extraction & Insertion 流程执行：
+           - Method 1（优先）：wget arXiv source .tar.gz → 直接拿到原图 PDF/JPG
+           - Method 2（回退）：PyMuPDF 逐页渲染 → 按 caption 位置裁剪
+           - 将提取的图存入 wiki/assets/<paper_name>/
+           - 必须转换 PDF 矢量图为 PNG 才能嵌入 markdown
 
 □ 3. 将提取的信息写回源页面
        根据 prompt 的结构要求，逐项填充：
@@ -391,14 +406,24 @@ the Agent **must** execute the full enrich manually. Do NOT skip this step.
        - 与其他论文的关联（如已知可判断的关系）
        - 引用关系（本文引用 + 被引）
 
+       ★ 同时插入插图到对应位置（必须）：
+       - 架构图 → 放在「具体方法 / 整体架构」下方
+       - 数据分布图 → 放在「数据引擎」表格下方
+       - benchmark 对比图 → 放在对应任务的「实验与结果」指标列表下方
+       - 硬件平台图 → 放在「真机部署」下方
+       - 图片路径：../../assets/<paper_name>/<figure>.<ext>
+
 □ 4. 删除 prompt 文件
        rm wiki/wiki/sources/.prompt_<slug>.md
 
 □ 5. 验证源页面不再包含"（待补充）"或"（待消化）"占位符
        grep "待补充\|待消化" wiki/wiki/sources/<slug>.md && echo "STILL HAS STUBS"
 
-□ 6. 更新 index.md 计数（如手动操作改变了条目数量）
-□ 7. git add + git commit
+□ 6. 验证至少嵌入了 2 张插图（架构图 + benchmark 图至少各一）
+       grep -c "!\[.*\](.*assets/.*)" wiki/wiki/sources/<slug>.md
+
+□ 7. 更新 index.md 计数（如手动操作改变了条目数量）
+□ 8. git add + git commit
 ```
 
 ### ② Query — answer a question from accumulated knowledge
@@ -488,6 +513,9 @@ python ... --no-fetch --input /tmp/article.md
 When automated LLM providers are unavailable, the Agent directly performs enrichment.
 This is the **complete step-by-step procedure**, not a description.
 
+**⚠️  FIGURES ARE NON-NEGOTIABLE during enrichment.** Text + figures must run in parallel
+in a single enrichment pass. See the Manual Enrich Checklist for the full checklist.
+
 ### Step-by-step
 
 1. **Identify stubs**: Run `enrich_wiki.py --only-sources`. If LLM unavailable, it writes
@@ -495,27 +523,37 @@ This is the **complete step-by-step procedure**, not a description.
 
 2. **Read the prompt**: `cat wiki/wiki/sources/.prompt_<slug>.md`
 
-3. **Extract PDF text** (in order of preference):
+3. **Extract PDF text AND figures in parallel** (both must complete before writing):
    ```bash
+   # --- Text (background) ---
    # Option A: pdftotext
-   pdftotext pdfs/<id>.pdf pdfs/<id>.txt && grep -n "method\|experiment\|loss" pdfs/<id>.txt
-
+   pdftotext pdfs/<id>.pdf pdfs/<id>.txt
    # Option B: pypdf (universal Python fallback)
    pip install --user --break-system-packages pypdf
 
-   # Option C: project page + arXiv abstract (if PDF parsing is impossible)
-   # Use web_fetch or urllib to retrieve HTML, extract text from project page
+   # --- Figures (parallel, NOT optional) ---
+   # Method 1 (preferred): arXiv source .tar.gz
+   wget -O /tmp/<id>.tar.gz "https://arxiv.org/src/<id>"
+   mkdir -p /tmp/<id>-src && tar xzf /tmp/<id>.tar.gz -C /tmp/<id>-src/
+   # Copy JPGs directly, convert PDFs to PNG via PyMuPDF
+   # → See full workflow in 'Workflow H: Paper Figure Extraction & Insertion'
    ```
 
-4. **Write enriched content to source page**: Fill in all stub sections following the
-   prompt's format requirements (核心观点、方法摘要、具体方法 with LaTeX formulas、
-   实验与结果 with concrete metrics).
+4. **Write enriched content + insert figures to source page**: Fill in all stub sections
+   following the prompt's format requirements (核心观点、方法摘要、具体方法 with LaTeX
+   formulas、实验与结果 with concrete metrics).
+
+   ★ **Insert figures at correct positions** (at minimum: architecture diagram below
+   method section, key result figure below experiments section). Image paths:
+   `../../assets/<paper_name>/<figure>.<ext>`.
 
 5. **Clean up**: `rm wiki/wiki/sources/.prompt_<slug>.md`
 
 6. **Verify no stubs remain**: `grep "待补充\|待消化" wiki/wiki/sources/<slug>.md`
 
-7. **Commit**: `git add -A && git commit -m "auto-wiki-archive: [Enrich] <slug>"`
+7. **Verify figures are embedded**: `grep -c "!\[.*\](.*assets/.*)" wiki/wiki/sources/<slug>.md`
+
+8. **Commit**: `git add -A && git commit -m "auto-wiki-archive: [Enrich] <slug>"`
 
 ---
 
@@ -584,7 +622,7 @@ Produces self-contained dark-theme HTML with all images base64-inlined.
 
 ---
 
-## Workflow H: Paper Figure Extraction & Insertion
+## Workflow H: Paper Figure Extraction & Insertion (MANDATORY during enrich)
 
 Extract figures from an academic paper PDF and insert them into wiki source pages at the
 correct locations. Three methods, in priority order:
