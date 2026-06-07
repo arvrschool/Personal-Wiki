@@ -44,6 +44,37 @@ def cfg(section: str, key: str, default):
     return get_config().get(section, {}).get(key, default)
 
 
+def get_wiki_paths(wiki_root: str | Path) -> dict[str, Path]:
+    """Determine output directories (support both legacy nested 'wiki/' and flat root)."""
+    root = Path(wiki_root)
+    
+    # Try flat root first (sources/ directly in wiki_root)
+    if (root / "sources").exists() or (root / "entities").exists():
+        return {
+            "sources": root / "sources",
+            "entities": root / "entities",
+            "topics": root / "topics",
+            "articles": root / "articles"
+        }
+        
+    # Check for nested 'wiki/' folder
+    if (root / "wiki" / "sources").exists():
+        return {
+            "sources": root / "wiki" / "sources",
+            "entities": root / "wiki" / "entities",
+            "topics": root / "wiki" / "topics",
+            "articles": root / "wiki" / "articles"
+        }
+
+    # Default fallback to nested (standard convention)
+    return {
+        "sources": root / "wiki" / "sources",
+        "entities": root / "wiki" / "entities",
+        "topics": root / "wiki" / "topics",
+        "articles": root / "wiki" / "articles"
+    }
+
+
 def _merge_dicts(base: dict, override: dict) -> dict:
     merged = dict(base)
     for key, value in override.items():

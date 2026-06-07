@@ -108,6 +108,7 @@ def _fetch_arxiv_metadata_html(clean_id: str) -> dict:
             "abstract": abstract,
             "published": published,
             "updated": published,
+            "year": _infer_year(clean_id, published),
             "categories": [],
             "primary_category": "",
             "project_urls": [],
@@ -165,6 +166,7 @@ def fetch_arxiv_metadata(arxiv_id: str) -> dict:
             "abstract": abstract,
             "published": published,
             "updated": updated,
+            "year": _infer_year(clean_id, published),
             "categories": categories,
             "primary_category": categories[0] if categories else "",
             "project_urls": project_urls[:3],
@@ -191,15 +193,34 @@ def download_pdf(arxiv_id: str, out_path: str) -> bool:
 
 
 def _extract_pdf_text(pdf_path: str) -> None:
-    """Extract full text from PDF using pdftotext, save as <pdf_path>.txt.
+    """Extract full text from PDF, save as <pdf_path>.txt.
 
-    The .txt cache avoids re-parsing the PDF on every query — use grep on the
-    .txt file to locate relevant passages rather than re-reading the PDF.
+    Priority: fitz (PyMuPDF) > pdftotext (poppler) > pypdf
     """
     txt_path = re.sub(r"\.pdf$", ".txt", pdf_path)
     if Path(txt_path).exists():
         print(f"  ✓ Text cache already exists: {txt_path}", file=sys.stderr)
         return
+
+    # 1. Try fitz (PyMuPDF) — Best quality/layout
+    try:
+        import fitz
+        doc = fitz.open(pdf_path)
+        text = ""
+        for page in doc:
+            text += page.get_text() + "\n\n"
+        if text.strip():
+            with open(txt_path, "w", encoding="utf-8") as f:
+                f.write(text)
+            size_kb = Path(txt_path).stat().st_size // 1024
+            print(f"  ✓ Text cache saved (fitz): {txt_path} ({size_kb} KB)", file=sys.stderr)
+            return
+    except ImportError:
+        pass
+    except Exception as e:
+        print(f"  [WARN] fitz extraction failed: {e}", file=sys.stderr)
+
+    # 2. Try pdftotext
     try:
         result = subprocess.run(
             ["pdftotext", "-layout", pdf_path, txt_path],
@@ -207,14 +228,30 @@ def _extract_pdf_text(pdf_path: str) -> None:
         )
         if result.returncode == 0 and Path(txt_path).exists():
             size_kb = Path(txt_path).stat().st_size // 1024
-            print(f"  ✓ Text cache saved: {txt_path} ({size_kb} KB)", file=sys.stderr)
-        else:
-            print(f"  [WARN] pdftotext failed: {result.stderr.decode()[:200]}", file=sys.stderr)
+            print(f"  ✓ Text cache saved (pdftotext): {txt_path} ({size_kb} KB)", file=sys.stderr)
+            return
     except FileNotFoundError:
-        print(f"  [WARN] pdftotext not found — trying pypdf fallback...", file=sys.stderr)
-        _extract_pdf_text_pypdf(pdf_path, txt_path)
+        pass
     except Exception as e:
-        print(f"  [WARN] text extraction failed: {e}", file=sys.stderr)
+        print(f"  [WARN] pdftotext failed: {e}", file=sys.stderr)
+
+    # 3. Fallback to pypdf
+    _extract_pdf_text_pypdf(pdf_path, txt_path)
+
+
+def _infer_year(arxiv_id: str, published: str = "") -> str:
+    """Infer year from published date or arXiv ID (YYMM.NNNNN)."""
+    if published and len(published) >= 4:
+        return published[:4]
+    
+    # ArXiv ID pattern: YYMM.NNNNN
+    m = re.search(r"(\d{2})\d{2}\.\d+", arxiv_id)
+    if m:
+        yy = int(m.group(1))
+        # 00-90 -> 2000-2090, 91-99 -> 1900-1999
+        return str(2000 + yy if yy < 91 else 1900 + yy)
+    
+    return ""
 
 
 def _extract_pdf_text_pypdf(pdf_path: str, txt_path: str) -> None:

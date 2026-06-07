@@ -21,6 +21,7 @@ Output structure:
     ├── log.md
     ├── wiki/
     │   ├── sources/         ← one page per source entry
+    │   ├── articles/        ← one page per web article
     │   ├── entities/        ← optional concept pages
     │   └── topics/          ← topic/category pages
 """
@@ -32,7 +33,7 @@ import sys
 from datetime import date
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
-from config_loader import cfg
+from config_loader import cfg, get_wiki_paths
 from entry_semantics import DEFAULT_FALLBACK_CATEGORY, concept_metadata, extract_concepts
 from entry_store import (
     ENTITY_ENTRIES_HEADER,
@@ -100,19 +101,52 @@ def _wikilink(title: str) -> str:
     return f"[[{_table_esc(title)}]]"
 
 
-def _is_enriched_content(text: str) -> bool:
-    """Return True if file has real content (not a stub placeholder)."""
-    return "（待补充）" not in text and "待消化后填写" not in text and len(text) > 2000
+def _infer_year(arxiv_id: str, published: str = "") -> str:
+    """Infer year from published date or arXiv ID (YYMM.NNNNN)."""
+    if published and len(str(published)) >= 4:
+        return str(published)[:4]
+    
+    # ArXiv ID pattern: YYMM.NNNNN
+    m = re.search(r"(\d{2})\d{2}\.\d+", arxiv_id)
+    if m:
+        yy = int(m.group(1))
+        # 00-90 -> 2000-2090, 91-99 -> 1900-1999
+        return str(2000 + yy if yy < 91 else 1900 + yy)
+    
+    return ""
 
-def _write_if_missing(path: Path, content: str, rebuild: bool) -> bool:
+
+def _is_enriched_content(text: str) -> bool:
+    """
+    Return True if file has real content (not just a stub placeholder).
+    Heuristic: check for common stub markers and length.
+    """
+    stubs = ["（待补充）", "待消化后填写", "（待填）", "### 整体架构\n（待补充）"]
+    
+    # If the file is very large, it's almost certainly enriched even if some stubs remain
+    if len(text) > 4000:
+        return True
+        
+    # If it's short and has any stub marker, it's a stub
+    if any(s in text for s in stubs) and len(text) < 2500:
+        return False
+        
+    # If it's extremely short, it's a stub or metadata-only
+    if len(text) < 600:
+        return False
+        
+    return True
+
+def _write_if_missing(path: Path, content: str, rebuild: bool, label: str = "source") -> bool:
     """Write file; skip if exists and not rebuilding. Never overwrite enriched content."""
     if path.exists():
         existing = path.read_text(encoding="utf-8")
         if _is_enriched_content(existing):
-            # Hard protection: enriched files are never overwritten, even with --rebuild
+            # Hard protection: enriched files are never overwritten via template rendering
             return False
         if not rebuild:
             return False
+    
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
     return True
@@ -120,8 +154,10 @@ def _write_if_missing(path: Path, content: str, rebuild: bool) -> bool:
 
 def _replace_section(content: str, header: str, new_body: str) -> str:
     """Replace the body of a markdown section in-place, preserving all other sections."""
+    # Ensure header has ## if it's a level 2 header
+    header_regex = re.escape(header)
     pattern = re.compile(
-        r"(^" + re.escape(header) + r"\s*\n)"  # section header line
+        r"(^" + header_regex + r"\s*\n)"  # section header line
         r"([\s\S]*?)"                            # current body (lazy)
         r"(?=^##|\Z)",                           # stop at next ## or EOF
         re.MULTILINE,
@@ -237,7 +273,7 @@ def _update_source_page(path: Path, paper: dict) -> bool:
         facts_lines.append("- **是否种子论文**：是 🌱")
 
     info_header = "关键事实" if template_id == "generic" else "基本信息"
-    updated = _replace_section(existing, info_header, "\n".join(facts_lines))
+    updated = _replace_section(existing, f"## {info_header}", "\n".join(facts_lines))
 
     # Also sync frontmatter
     updated = _update_source_frontmatter(updated, paper)
@@ -363,6 +399,12 @@ def _is_research_entry(entry: dict) -> bool:
     return template_id == "research_paper" or entry_type == "paper" or bool(entry.get("arxiv_id"))
 
 
+def _is_article_entry(entry: dict) -> bool:
+    template_id = (entry.get("template_id") or "").strip().lower()
+    entry_type = (entry.get("entry_type") or "").strip().lower()
+    return template_id == "web_article" or entry_type == "article"
+
+
 def _topic_compare_block(entries: list[dict]) -> tuple[str, str]:
     research_topic = bool(entries) and all(_is_research_entry(entry) for entry in entries)
     if research_topic:
@@ -394,7 +436,7 @@ def build_source_page(paper: dict, template_dir: str | Path | None = None) -> st
     authors = paper.get("authors") or []
     author = paper.get("author") or (authors[0] if authors else "")
     account = paper.get("account") or ""
-    year = paper.get("year") or "?"
+    year = paper.get("year") or _infer_year(arxiv_id, str(paper.get("date") or paper.get("published_at") or "")) or "?"
     date_value = paper.get("date") or paper.get("published_at") or (year if year != "?" else None)
     citations = paper.get("citations") or 0
     abstract = _truncate(paper.get("abstract") or "", 500)
@@ -811,27 +853,43 @@ def main():
     else:
         papers_to_write = papers
 
-    sources_dir = wiki_root / "wiki" / "sources"
-    entities_dir = wiki_root / "wiki" / "entities"
-    topics_dir = wiki_root / "wiki" / "topics"
-    for d in [sources_dir, entities_dir, topics_dir]:
+    # Determine output directories (support both legacy nested 'wiki/' and flat root)
+    if (wiki_root / "sources").exists() or (wiki_root / "entities").exists():
+        # Flat structure
+        sources_dir = wiki_root / "sources"
+        entities_dir = wiki_root / "entities"
+        topics_dir = wiki_root / "topics"
+        articles_dir = wiki_root / "articles"
+    elif (wiki_root / "wiki" / "sources").exists():
+        # Legacy/Default nested structure
+        sources_dir = wiki_root / "wiki" / "sources"
+        entities_dir = wiki_root / "wiki" / "entities"
+        topics_dir = wiki_root / "wiki" / "topics"
+        articles_dir = wiki_root / "wiki" / "articles"
+    else:
+        # Default fallback
+        sources_dir = wiki_root / "wiki" / "sources"
+        entities_dir = wiki_root / "wiki" / "entities"
+        topics_dir = wiki_root / "wiki" / "topics"
+        articles_dir = wiki_root / "wiki" / "articles"
+        
+    for d in [sources_dir, entities_dir, topics_dir, articles_dir]:
         d.mkdir(parents=True, exist_ok=True)
 
     # --- Source pages ---
     import re as _re
 
-    # Pre-build index for duplicate detection:
-    #   arxiv_id -> existing file path
-    #   url-slug  -> existing file path (for no-arxiv-id papers)
+    # Pre-build index for duplicate detection across BOTH sources and articles
     existing_by_arxiv: dict[str, Path] = {}
     existing_by_urlslug: dict[str, Path] = {}
-    for existing_f in sources_dir.glob("*.md"):
-        m = _re.search(r"(\d{4}\.\d{4,5})", existing_f.stem)
-        if m:
-            existing_by_arxiv.setdefault(m.group(1), existing_f)
-        else:
-            # index by first 40 chars of stem as URL-slug proxy
-            existing_by_urlslug.setdefault(existing_f.stem[:40], existing_f)
+    for d in [sources_dir, articles_dir]:
+        for existing_f in d.glob("*.md"):
+            m = _re.search(r"(\d{4}\.\d{4,5})", existing_f.stem)
+            if m:
+                existing_by_arxiv.setdefault(m.group(1), existing_f)
+            else:
+                # index by first 40 chars of stem as URL-slug proxy
+                existing_by_urlslug.setdefault(existing_f.stem[:40], existing_f)
 
     def _find_existing(aid: str, slug_t: str) -> Path | None:
         """Return existing file for this paper if one exists under a different name."""
@@ -851,11 +909,15 @@ def main():
         aid = paper.get("arxiv_id") or ""
         slug_t = _slug(paper.get("title") or "paper")
         filename = f"{slug_t}-{aid}.md" if aid else f"{slug_t}.md"
-        path = sources_dir / filename
+        
+        # Decide target directory based on entry type
+        is_article = _is_article_entry(paper)
+        target_dir = articles_dir if is_article else sources_dir
+        path = target_dir / filename
 
         existing_path = _find_existing(aid, slug_t)
         if existing_path is not None and existing_path != path:
-            # A file for this paper already exists under a different name — update it, skip creation
+            # A file for this paper already exists — update it, skip creation
             if _update_source_page(existing_path, paper):
                 written_sources.append(existing_path.name)
                 touched_files.append(existing_path)
@@ -878,7 +940,7 @@ def main():
             else:
                 skipped_sources.append(filename)
 
-    print(f"[wiki] sources: {len(written_sources)} written, {len(skipped_sources)} skipped",
+    print(f"[wiki] sources/articles: {len(written_sources)} written, {len(skipped_sources)} skipped",
           file=sys.stderr)
 
     # --- Entity pages ---
@@ -894,9 +956,8 @@ def main():
         if not slug_name: continue
         
         path = entities_dir / f"{slug_name}.md"
-        if not path.exists() or args.rebuild:
-            content = build_entity_page(concept, papers)
-            path.write_text(content, encoding="utf-8")
+        content = build_entity_page(concept, papers)
+        if _write_if_missing(path, content, args.rebuild, label="entity"):
             written_entities.append(concept)
             touched_files.append(path)
         else:
@@ -914,9 +975,8 @@ def main():
     updated_topics = []
     for topic_name, description in topic_taxonomy.items():
         path = topics_dir / f"{topic_name}.md"
-        if not path.exists() or args.rebuild:
-            content = build_topic_page(topic_name, description, papers)
-            path.write_text(content, encoding="utf-8")
+        content = build_topic_page(topic_name, description, papers)
+        if _write_if_missing(path, content, args.rebuild, label="topic"):
             written_topics.append(topic_name)
             touched_files.append(path)
         else:
@@ -928,10 +988,31 @@ def main():
 
     # --- index.md ---
     index_path = wiki_root / "index.md"
-    index_content = build_index(args.topic, papers, topic_taxonomy)
-    index_path.write_text(index_content, encoding="utf-8")
+    new_index_content = build_index(args.topic, papers, topic_taxonomy)
+    
+    if index_path.exists():
+        existing_index = index_path.read_text(encoding="utf-8")
+        # Surgically update sections while preserving others (like ## 文章)
+        updated_index = existing_index
+        for section in ["## 概览", "## 实体页", "## 主题页", "## 来源条目"]:
+            # Extract new body for this section
+            m = re.search(r"(^" + re.escape(section) + r"\s*\n)([\s\S]*?)(?=^##|\Z)", new_index_content, re.MULTILINE)
+            if m:
+                new_body = m.group(2)
+                updated_index = _replace_section(updated_index, section, new_body)
+        
+        # Also update the title/date line at top
+        updated_index = re.sub(r"^# .*$", f"# {args.topic} 知识库索引", updated_index, flags=re.MULTILINE)
+        updated_index = re.sub(r"^> 最后更新：.*$", f"> 最后更新：{TODAY}", updated_index, flags=re.MULTILINE)
+        
+        if updated_index != existing_index:
+            index_path.write_text(updated_index, encoding="utf-8")
+            print(f"[wiki] index.md surgically updated", file=sys.stderr)
+    else:
+        index_path.write_text(new_index_content, encoding="utf-8")
+        print(f"[wiki] index.md created", file=sys.stderr)
+    
     touched_files.append(index_path)
-    print(f"[wiki] index.md updated", file=sys.stderr)
 
     # --- log.md ---
     log_path = wiki_root / "log.md"
@@ -965,7 +1046,7 @@ def main():
     print(f"\n## Wiki 构建完成：{args.topic}\n")
     print(f"**输出目录**：`{wiki_root.resolve()}/`")
     print(f"\n**文件结构**：")
-    print(f"```\n{wiki_root.name}/\n├── index.md\n├── log.md\n└── wiki/\n    ├── sources/\n    ├── entities/\n    └── topics/\n```")
+    print(f"```\n{wiki_root.name}/\n├── index.md\n├── log.md\n└── wiki/\n    ├── sources/\n    ├── articles/\n    ├── entities/\n    └── topics/\n```")
 
 
 if __name__ == "__main__":

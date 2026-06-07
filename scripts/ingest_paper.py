@@ -56,7 +56,7 @@ import xml.etree.ElementTree as ET
 from datetime import date
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
-from config_loader import cfg
+from config_loader import cfg, get_wiki_paths
 from entry_store import (
     ENTITY_ENTRIES_HEADER,
     ENTITY_ENTRIES_HEADER_ALIASES,
@@ -970,9 +970,12 @@ def main():
 
     wiki_dir = Path(args.wiki_dir)
     entries_path = Path(args.entries_path)
-    sources_dir = wiki_dir / "wiki" / "sources"
-    entities_dir = wiki_dir / "wiki" / "entities"
-    topics_dir = wiki_dir / "wiki" / "topics"
+    
+    paths = get_wiki_paths(wiki_dir)
+    sources_dir = paths["sources"]
+    entities_dir = paths["entities"]
+    topics_dir = paths["topics"]
+    
     index_path = wiki_dir / "index.md"
     log_path = wiki_dir / "log.md"
 

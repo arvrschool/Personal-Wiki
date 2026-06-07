@@ -1293,15 +1293,24 @@ def convert(md_path, output_path=None, title_override=None):
     full_html = build_html(title, nav_html, '\n'.join(body_parts))
 
     if output_path is None:
-        # Default: ProjectRoot / exports / slug / slug.html
-        # source_md is at: .../wiki/wiki/sources/file.md
-        wiki_root = md_path.parent.parent.parent
+        # Resolve wiki root to place exports folder
+        curr = md_path.parent
+        wiki_root = None
+        for _ in range(5):
+            if (curr / "entries.json").exists() or (curr / "index.md").exists():
+                wiki_root = curr
+                break
+            curr = curr.parent
+        if wiki_root is None:
+            wiki_root = md_path.parent.parent.parent
+
         slug = md_path.stem
         article_export_dir = wiki_root / 'exports' / slug
         article_export_dir.mkdir(parents=True, exist_ok=True)
         output_path = article_export_dir / f'{slug}.html'
+    else:
+        output_path = Path(output_path)
 
-    output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(full_html, encoding='utf-8')
     return output_path

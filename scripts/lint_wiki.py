@@ -22,7 +22,7 @@ import re
 import sys
 from datetime import date
 from pathlib import Path
-from config_loader import cfg
+from config_loader import cfg, get_wiki_paths
 from entry_store import RELATIONS_HEADER, RELATIONS_HEADER_ALIASES, find_first_header
 from llm_cli_utils import (
     anthropic_client_kwargs,
@@ -92,12 +92,18 @@ def structural_lint(wiki_dir: Path) -> list[dict]:
     - source pages with stub sections
     - source pages with an empty relation section
     """
-    sources_dir = wiki_dir / "wiki" / "sources"
-    entities_dir = wiki_dir / "wiki" / "entities"
-    topics_dir = wiki_dir / "wiki" / "topics"
+    paths = get_wiki_paths(wiki_dir)
+    sources_dir = paths["sources"]
+    entities_dir = paths["entities"]
+    topics_dir = paths["topics"]
+    articles_dir = paths.get("articles")
 
     all_md: list[Path] = []
-    for d in [sources_dir, entities_dir, topics_dir]:
+    dirs_to_scan = [sources_dir, entities_dir, topics_dir]
+    if articles_dir:
+        dirs_to_scan.append(articles_dir)
+        
+    for d in dirs_to_scan:
         if d.exists():
             all_md += _get_md_files(d)
 
@@ -242,8 +248,9 @@ def semantic_lint(wiki_dir: Path, llm_provider: str, llm_model: str, direct_inpu
     - Missing entity pages (concept mentioned in 3+ entries but no dedicated page)
     - Suggestions for new sources worth adding
     """
-    sources_dir = wiki_dir / "wiki" / "sources"
-    entities_dir = wiki_dir / "wiki" / "entities"
+    paths = get_wiki_paths(wiki_dir)
+    sources_dir = paths["sources"]
+    entities_dir = paths["entities"]
 
     all_files: list[Path] = []
     for d in [sources_dir, entities_dir]:

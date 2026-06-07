@@ -124,7 +124,7 @@ def _remove_missing_images(content: str, page_path: Path) -> str:
     return '\n'.join(out_lines)
 
 
-from config_loader import cfg
+from config_loader import cfg, get_wiki_paths
 from toc_utils import update_toc
 
 TODAY = date.today().isoformat()
@@ -1607,19 +1607,23 @@ def enrich_source_page(
                 raw = None
 
             if raw is None:
-                prompt_file = page_path.parent / f".prompt_{page_path.stem}.md"
-                prompt_file.write_text(prompt, encoding="utf-8")
-                print(f"  [prompt] {prompt_file.name} saved → ready for agent-based enrichment", file=sys.stderr)
-                return False
-
-            key_points_body = _parse_llm_section(raw, highlights_header)
-            rel_body = _parse_llm_section(raw, relations_header)
-            # Resolve short titles to precise Obsidian slugs via fuzzy matching
-            rel_body = _resolve_short_titles_to_slugs(rel_body, all_papers)
-            citation_body = _parse_llm_section(raw, citation_header)
-            method_body = _parse_llm_section(raw, method_header)
-            detailed_method_body = _parse_llm_section(raw, detailed_method_header)
-            results_body = _parse_llm_section(raw, results_header)
+                # We'll save the prompt at the end of the function instead of returning early
+                # to allow figure/media/web enrichment to proceed.
+                key_points_body = None
+                rel_body = _build_relation_body(paper, related)
+                citation_body = "（待补充）"
+                method_body = "（等待 LLM 富化...）"
+                detailed_method_body = "（等待 LLM 富化...）"
+                results_body = "（等待 LLM 富化...）"
+            else:
+                key_points_body = _parse_llm_section(raw, highlights_header)
+                rel_body = _parse_llm_section(raw, relations_header)
+                # Resolve short titles to precise Obsidian slugs via fuzzy matching
+                rel_body = _resolve_short_titles_to_slugs(rel_body, all_papers)
+                citation_body = _parse_llm_section(raw, citation_header)
+                method_body = _parse_llm_section(raw, method_header)
+                detailed_method_body = _parse_llm_section(raw, detailed_method_header)
+                results_body = _parse_llm_section(raw, results_header)
         else:
             points = extract_key_points(pdf_text or abstract, title, has_full_text=has_full_text)
             key_points_body = _fmt_points(points)
@@ -1647,7 +1651,8 @@ def enrich_source_page(
             results_body = "（规则模式无法生成，请使用 --llm-provider auto 重新运行（需配置 API key））"
 
         # Apply all section updates
-        new_content = _replace_section(content, highlights_header, key_points_body + "\n")
+        if key_points_body:
+            new_content = _replace_section(content, highlights_header, key_points_body + "\n")
         new_content = _replace_section(new_content, relations_header, rel_body + "\n")
         # Insert 引用关系 section after 与其他论文的关联 if not present
         if f"## {citation_header}" not in new_content:
@@ -1797,11 +1802,35 @@ def enrich_source_page(
     new_content = update_toc(new_content)
     new_content = _remove_missing_images(new_content, page_path)
     page_path.write_text(new_content, encoding="utf-8")
+
+    # If we were in direct-inference mode and deferred the text enrichment,
+    # save the prompt now and return False (so it's not marked as fully enriched).
+    if LLM_AVAILABLE and 'raw' in locals() and raw is None:
+        prompt_file = page_path.parent / f".prompt_{page_path.stem}.md"
+        prompt_file.write_text(prompt, encoding="utf-8")
+        print(f"  [prompt] {prompt_file.name} saved → ready for agent-based enrichment", file=sys.stderr)
+        return False
+
     return True
 
 
 def _fmt_points(points: list[str]) -> str:
     return "\n".join(f"{i+1}. {p}" for i, p in enumerate(points))
+
+
+def _infer_year(arxiv_id: str, published: str = "") -> str:
+    """Infer year from published date or arXiv ID (YYMM.NNNNN)."""
+    if published and len(str(published)) >= 4:
+        return str(published)[:4]
+    
+    # ArXiv ID pattern: YYMM.NNNNN
+    m = re.search(r"(\d{2})\d{2}\.\d+", arxiv_id)
+    if m:
+        yy = int(m.group(1))
+        # 00-90 -> 2000-2090, 91-99 -> 1900-1999
+        return str(2000 + yy if yy < 91 else 1900 + yy)
+    
+    return ""
 
 
 def _resolve_short_titles_to_slugs(rel_body: str, all_papers: list[dict]) -> str:
@@ -2936,9 +2965,27 @@ def main():
 
     wiki_dir = Path(args.wiki_dir)
     entries_path = Path(args.entries_path)
-    sources_dir = wiki_dir / "wiki" / "sources"
-    entities_dir = wiki_dir / "wiki" / "entities"
-    topics_dir = wiki_dir / "wiki" / "topics"
+    
+    # Determine output directories (support both legacy nested 'wiki/' and flat root)
+    if (wiki_dir / "sources").exists() or (wiki_dir / "entities").exists():
+        # Flat structure
+        sources_dir = wiki_dir / "sources"
+        entities_dir = wiki_dir / "entities"
+        topics_dir = wiki_dir / "topics"
+        articles_dir = wiki_dir / "articles"
+    elif (wiki_dir / "wiki" / "sources").exists():
+        # Legacy/Default nested structure
+        sources_dir = wiki_dir / "wiki" / "sources"
+        entities_dir = wiki_dir / "wiki" / "entities"
+        topics_dir = wiki_dir / "wiki" / "topics"
+        articles_dir = wiki_dir / "wiki" / "articles"
+    else:
+        # Default fallback
+        sources_dir = wiki_dir / "wiki" / "sources"
+        entities_dir = wiki_dir / "wiki" / "entities"
+        topics_dir = wiki_dir / "wiki" / "topics"
+        articles_dir = wiki_dir / "wiki" / "articles"
+
     pdf_dir = Path(args.pdf_dir) if args.pdf_dir else None
     figures_dir = Path(args.figures_dir) if args.figures_dir else (wiki_dir / "figures") if args.figures else None
     media_dir = Path(args.media_dir) if args.media_dir else (wiki_dir / "media") if args.media else None
