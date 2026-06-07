@@ -35,6 +35,20 @@ _VISION_AUTO_ORDER = (
 )
 
 
+def detect_host_cli() -> str | None:
+    """Detect if we are running inside a supported CLI environment."""
+    # Claude Code CLI
+    if any(k.startswith("CLAUDE_CODE_") for k in os.environ):
+        return "claude"
+    # Codex CLI
+    if any(k.startswith("CODEX_") for k in os.environ):
+        return "codex"
+    # Gemini CLI
+    if os.environ.get("GEMINI_CLI") == "1":
+        return "gemini"
+    return None
+
+
 def _cfg_str(section: str, key: str) -> str:
     value = cfg(section, key, "")
     return "" if value is None else str(value).strip()
@@ -87,13 +101,22 @@ def describe_provider_selection(
     vision: bool = False,
     allowed: set[str] | None = None,
 ) -> str:
-    allowed_set = set(allowed or (_VISION_AUTO_ORDER if vision else _TEXT_AUTO_ORDER))
+    # Resolve first to see what we'd actually use
+    resolved = resolve_provider(provider, vision=vision, allowed=allowed)
+    
     if provider != "auto":
+        allowed_set = set(allowed or (_VISION_AUTO_ORDER if vision else _TEXT_AUTO_ORDER))
         if provider not in allowed_set:
             mode = "vision" if vision else "text"
             return f"{provider} (unsupported for {mode})"
         return provider
-    resolved = resolve_provider(provider, vision=vision, allowed=allowed_set)
+        
+    # If resolved to direct-inference, check if we're in an agent environment
+    if resolved == "direct-inference":
+        host = detect_host_cli()
+        if host:
+            return f"auto -> direct-inference ({host}-agent)"
+            
     return f"auto -> {resolved}"
 
 
@@ -233,7 +256,7 @@ def call_llm(
 
     Two paths:
       1. API key available → call API directly (openai/anthropic/ollama)
-      2. No API key       → direct-inference (save prompt, host Agent enriches)
+      2. No API key        → direct-inference (save prompt, host Agent enriches)
     """
 
     provider = resolve_provider(
@@ -250,8 +273,13 @@ def call_llm(
             return Path(direct_input).read_text(encoding="utf-8")
         prompt_file = Path.cwd() / ".llm_prompt.txt"
         prompt_file.write_text(prompt, encoding="utf-8")
+        
+        # Check if we are in an agent environment to provide a more helpful message
+        host = detect_host_cli()
+        agent_msg = f"\nRunning inside {host} agent. " if host else ""
+        
         raise RuntimeError(
-            f"direct-inference: prompt saved to {prompt_file}.\n"
+            f"direct-inference: prompt saved to {prompt_file}.{agent_msg}\n"
             f"Have your Agent process it, save the response to a file, "
             f"then re-run with --direct-input <response_file> to resume."
         )

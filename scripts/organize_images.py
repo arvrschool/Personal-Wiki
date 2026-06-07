@@ -4,6 +4,8 @@ import shutil
 import sys
 import urllib.parse
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent))
+from config_loader import cfg, get_wiki_paths
 
 def organize_pasted_images(wiki_dir: Path, fix: bool = False):
     """
@@ -11,18 +13,16 @@ def organize_pasted_images(wiki_dir: Path, fix: bool = False):
     appropriate figures subfolder.
     """
     wiki_dir = Path(wiki_dir).resolve()
-    # Root directory is parent of wiki_dir
-    root_dir = wiki_dir.parent
+    paths = get_wiki_paths(wiki_dir)
     
-    # Internal wiki content dir
-    content_dir = wiki_dir / "wiki"
     figures_dir = wiki_dir / "figures"
+    # Root dir is just wiki_dir here
+    root_dir = wiki_dir
     
-    if not content_dir.exists():
-        # Fallback if structure is different
-        content_dir = wiki_dir
-        
-    md_files = list(content_dir.rglob("*.md"))
+    md_files = []
+    for d in [paths["sources"], paths["entities"], paths["topics"], paths.get("articles")]:
+        if d and d.exists():
+            md_files.extend(list(d.rglob("*.md")))
     
     results = []
     
@@ -113,7 +113,7 @@ def organize_pasted_images(wiki_dir: Path, fix: bool = False):
                 # Update link in markdown
                 try:
                     rel_to_wiki = md_file.relative_to(wiki_dir)
-                    depth = len(rel_to_wiki.parents) - 1
+                    depth = len(rel_to_wiki.parents)
                     prefix = "../" * depth
                     rel_link = f"{prefix}figures/{target_subfolder.name}/{img_filename}"
                 except Exception:

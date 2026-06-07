@@ -51,7 +51,7 @@ from template_utils import (
     yaml_string,
 )
 
-from config_loader import cfg
+from config_loader import cfg, get_wiki_paths
 
 TODAY = date.today().isoformat()
 SCRIPT_DIR = Path(__file__).parent
@@ -347,12 +347,26 @@ def _fetch_via_dokobot(url: str) -> str:
             file=sys.stderr,
         )
         sys.exit(1)
-    result = subprocess.run(
-        [dokobot_bin, "read", "--local", url],
-        capture_output=True,
-        text=True,
-        timeout=cfg("llm", "timeout", 300),
-    )
+
+    # On Windows, we often need shell=True and double-quoting to handle complex URLs
+    is_windows = sys.platform == "win32"
+    if is_windows:
+        command = f'"{dokobot_bin}" read --local "{url}"'
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            shell=True,
+            timeout=cfg("llm", "timeout", 300),
+        )
+    else:
+        result = subprocess.run(
+            [dokobot_bin, "read", "--local", url],
+            capture_output=True,
+            text=True,
+            timeout=cfg("llm", "timeout", 300),
+        )
+
     if result.returncode != 0:
         print(
             f"[error] dokobot failed (exit {result.returncode}):\n{result.stderr[:500]}",
@@ -360,6 +374,35 @@ def _fetch_via_dokobot(url: str) -> str:
         )
         sys.exit(1)
     return result.stdout
+
+
+def _fetch_via_baoyu_url_to_markdown(url: str) -> str | None:
+    """Fetch article using baoyu-url-to-markdown vendor tool."""
+    vendor_script = SCRIPT_DIR.parent / "vendor" / "baoyu-url-to-markdown" / "scripts" / "main.ts"
+    if not vendor_script.exists():
+        return None
+
+    bun_bin = shutil.which("bun")
+    cmd = ([bun_bin, str(vendor_script)] if bun_bin
+           else ["npx", "-y", "bun", str(vendor_script)])
+
+    tmp_file = Path(tempfile.mktemp(suffix=".md"))
+    print(f"[fetch] using baoyu-url-to-markdown (vendor)...")
+    try:
+        result = subprocess.run(
+            cmd + [url, "-o", str(tmp_file)],
+            capture_output=True, text=True, timeout=120,
+        )
+        if result.returncode == 0 and tmp_file.exists():
+            content = tmp_file.read_text(encoding="utf-8")
+            if content.strip():
+                return content
+        print(f"[fetch] baoyu script failed (exit {result.returncode})")
+    except Exception as e:
+        print(f"[fetch] baoyu script error ({e})")
+    finally:
+        tmp_file.unlink(missing_ok=True)
+    return None
 
 
 def _fetch_twitter_as_markdown(url: str) -> str:
@@ -370,7 +413,7 @@ def _fetch_twitter_as_markdown(url: str) -> str:
     Fallback: dokobot (needs browser login session).
     """
     # Resolve vendor script relative to this file — no hardcoded absolute paths
-    vendor_script = Path(__file__).parent.parent / "vendor" / "baoyu-danger-x-to-markdown" / "scripts" / "main.ts"
+    vendor_script = SCRIPT_DIR.parent / "vendor" / "baoyu-danger-x-to-markdown" / "scripts" / "main.ts"
 
     if vendor_script.exists():
         # Resolve bun: PATH first, then npx -y bun as fallback
@@ -387,7 +430,6 @@ def _fetch_twitter_as_markdown(url: str) -> str:
             )
             if result.returncode == 0 and tmp_file.exists():
                 content = tmp_file.read_text(encoding="utf-8")
-                tmp_file.unlink(missing_ok=True)
                 if content.strip():
                     return content
             # Non-zero exit or empty output — fall through to dokobot
@@ -418,29 +460,13 @@ def fetch_article_markdown(url: str) -> str:
         print(f"[fetch] GitHub URL detected ({platform}) — using GitHub API + raw content...")
         return _fetch_github_as_markdown(url)
 
-    # All other platforms: dokobot (WeChat, Zhihu, XHS, Substack, Medium, Notion, HuggingFace, generic)
-    dokobot_bin = shutil.which("dokobot")
-    if not dokobot_bin:
-        print(
-            "[error] dokobot is not installed or not on PATH.\n"
-            "  Install: pip install dokobot  or  npm install -g dokobot",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    # Primary for generic web articles: baoyu-url-to-markdown
+    content = _fetch_via_baoyu_url_to_markdown(url)
+    if content:
+        return content
 
-    result = subprocess.run(
-        [dokobot_bin, "read", "--local", url],
-        capture_output=True,
-        text=True,
-        timeout=cfg("llm", "timeout", 300),
-    )
-    if result.returncode != 0:
-        print(
-            f"[error] dokobot failed (exit {result.returncode}):\n{result.stderr[:500]}",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    return result.stdout
+    # Fallback: dokobot
+    return _fetch_via_dokobot(url)
 
 
 def parse_markdown_meta(md: str, fallback_url: str = "") -> tuple[str, str]:
@@ -1944,9 +1970,15 @@ def ingest_article(
         ref_label = pm.get("arxiv_id") or pm.get("url") or "—"
         print(f"  - {pm.get('title','')[:60]} [{type_label} | {ref_label[:60]}]")
 
+    # Determine output directories (support both legacy nested 'wiki/' and flat root)
+    paths = get_wiki_paths(wiki_dir)
+    sources_dir = paths["sources"]
+    entities_dir = paths["entities"]
+    topics_dir = paths["topics"]
+    articles_dir = paths["articles"]
+
     # Generate article slug
     article_slug = _article_slug_v2(title, platform)
-    articles_dir = wiki_dir / "wiki" / "articles"
     articles_dir.mkdir(parents=True, exist_ok=True)
     article_page_path = articles_dir / f"{article_slug}.md"
 
@@ -1965,7 +1997,6 @@ def ingest_article(
     pending_papers = []    # [{paper_info}]
     conflict_flags = {}    # slug → bool
 
-    sources_dir = wiki_dir / "wiki" / "sources"
     stats_enriched = 0
     stats_ingested = 0
     stats_pending = 0
@@ -2230,6 +2261,20 @@ Examples:
         help="Skip post-ingest enrich after writing the article page",
     )
     parser.set_defaults(post_ingest_enrich=True)
+    git_group = parser.add_mutually_exclusive_group()
+    git_group.add_argument(
+        "--git-commit",
+        dest="git_commit",
+        action="store_true",
+        help="Create a git commit after writing files",
+    )
+    git_group.add_argument(
+        "--no-git-commit",
+        dest="git_commit",
+        action="store_false",
+        help="Disable git commit for this run",
+    )
+    parser.set_defaults(git_commit=None)
 
     args = parser.parse_args()
 
@@ -2237,7 +2282,7 @@ Examples:
         parser.error("--url is required unless --no-fetch is specified")
     text_provider_desc = describe_provider_selection(
         args.llm_provider,
-        allowed={"direct-inference", "anthropic", "openai", "ollama"},
+        allowed={"direct-inference", "anthropic", "openai", "ollama", "claude-cli", "codex-cli", "gemini-cli"},
     )
     vision_provider_desc = describe_provider_selection(
         args.llm_provider,
@@ -2267,6 +2312,9 @@ Examples:
         print(f"[error] input file not found: {input_file}", file=sys.stderr)
         sys.exit(1)
 
+    # Ingest the article
+    # We don't have a direct list of touched files from ingest_article yet, 
+    # but we can track them. For now, we'll use a simplified version.
     ingest_article(
         url=args.url,
         wiki_dir=wiki_dir,
@@ -2283,6 +2331,17 @@ Examples:
         direct_input=args.direct_input,
         skip_images=args.skip_images,
     )
+
+    # Optional git commit
+    should_git_commit = args.git_commit if args.git_commit is not None else cfg("git", "auto_commit", False)
+    if should_git_commit and not args.dry_run:
+        from git_utils import git_commit_paths
+        # This is a bit coarse, but covers the major touched areas
+        # A more precise implementation would collect paths from ingest_article
+        msg = f"auto-wiki-archive: [Ingest] {args.url or input_file.name}"
+        committed, detail = git_commit_paths(wiki_dir, [wiki_dir, papers_path], msg)
+        if committed:
+            print(f"[git] committed: {detail}")
 
 
 if __name__ == "__main__":
